@@ -36,6 +36,8 @@
     "redis": "^2.8.0"
   },
   "babel": {
-    "presets": ["env"]
+    "presets": [
+      "env"
+    ]
   }
 }
