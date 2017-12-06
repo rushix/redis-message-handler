@@ -1,0 +1,41 @@
+{
+  "name": "redis-message-handler",
+  "version": "0.0.1",
+  "description": "redis based cluster message producer/handler",
+  "main": "./dist/app.js",
+  "scripts": {
+    "build": "babel ./src/ --out-dir ./dist",
+    "test": "mocha --require babel-core/register --recursive"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rushix/redis-message-handler.git"
+  },
+  "keywords": [
+    "redis",
+    "subscribe",
+    "publish",
+    "standalone",
+    "balanced"
+  ],
+  "author": "rushix",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/rushix/redis-message-handler/issues"
+  },
+  "homepage": "https://github.com/rushix/redis-message-handler#readme",
+  "devDependencies": {
+    "babel-cli": "^6.26.0",
+    "babel-core": "^6.26.0",
+    "babel-preset-env": "^1.6.1",
+    "chai": "^4.1.2",
+    "mocha": "^4.0.1"
+  },
+  "dependencies": {
+    "bluebird": "^3.5.1",
+    "redis": "^2.8.0"
+  },
+  "babel": {
+    "presets": ["env"]
+  }
+}
