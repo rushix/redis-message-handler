@@ -19,6 +19,18 @@ const STATES = {
   QUIT:     'QUIT'
 };
 
+const config = {
+  channel: 'channel:subscribtion',
+
+  producerKey:    'string:producer:0:id',
+  handlerListKey: 'list:handler',
+
+  producerKeyTtl: 15 * 1000,
+
+  producerScenarioIterationDuration: 10 * 1000,
+  handlerScenarioIterationDuration:  20 * 1000
+};
+
 const main = (createClientOptions = {}) => {
 
   const client = redis.createClient(createClientOptions);
@@ -35,15 +47,19 @@ function performScenario(client, state = STATES.CHECK, message = '') {
     case STATES.CHECK:
       checkerScenario(client);
       break;
+
     case STATES.DEBUG:
       debuggerScenario(client);
       break;
+
     case STATES.PRODUCE:
       producerScenario(client);
       break;
+
     case STATES.HANDLE:
       handlerScenario(client);
       break;
+
     default:
       outerScenario(client, message);
   }
@@ -72,6 +88,42 @@ function producerScenario(client) {
 
 function handlerScenario(client) {
   logger('Performing handler scenario');
+
+  const {
+    handlerScenarioIterationDuration,
+    channel,
+    producerKey,
+    handlerListKey,
+    debugListKey
+  } = config;
+
+  client.subscribe(channel);
+
+  client.onAsync('message')
+    .then(() => {
+
+      return client.lpopAsync(handlerListKey);
+
+    })
+    .then(message => {
+
+      if (message === null) {
+        return Promise.resolve('already handled');
+      } else {
+        message
+      }
+
+    })
+    .then(report => {
+
+      logger(report);
+
+    })
+    .catch(err => {
+
+      performScenario(client, STATE.QUIT, err);
+
+    });
 
 }
 
