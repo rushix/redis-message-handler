@@ -26,6 +26,20 @@ var STATES = {
   QUIT: 'QUIT'
 };
 
+var config = {
+  channel: 'channel:subscribtion',
+
+  producerKey: 'string:producer:0:id',
+  handlerListKey: 'list:handler',
+
+  producerKeyTtl: 15 * 1000,
+
+  producerScenarioIterationDuration: 10 * 1000,
+  handlerScenarioIterationDuration: 20 * 1000,
+
+  handlerErrorChancePercentage: 0.05
+};
+
 var main = function main() {
   var createClientOptions = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
 
@@ -44,15 +58,19 @@ function performScenario(client) {
     case STATES.CHECK:
       checkerScenario(client);
       break;
+
     case STATES.DEBUG:
       debuggerScenario(client);
       break;
+
     case STATES.PRODUCE:
       producerScenario(client);
       break;
+
     case STATES.HANDLE:
       handlerScenario(client);
       break;
+
     default:
       outerScenario(client, message);
   }
@@ -80,6 +98,79 @@ function producerScenario(client) {
 
 function handlerScenario(client) {
   logger('Performing handler scenario');
+
+  var handlerScenarioIterationDuration = config.handlerScenarioIterationDuration,
+      handlerErrorChancePercentage = config.handlerErrorChancePercentage,
+      channel = config.channel,
+      producerKey = config.producerKey,
+      producerKeyTtl = config.producerKeyTtl,
+      handlerListKey = config.handlerListKey,
+      debuggerListKey = config.debuggerListKey;
+
+
+  var pubSubClient = _redis2.default.createClient();
+
+  pubSubClient.subscribe(channel);
+
+  pubSubClient.on('message', function () {
+    _bluebird.Promise.resolve().then(function () {
+
+      // logger(`${ message }`);
+
+      return client.lpopAsync(handlerListKey);
+    }).then(function (message) {
+
+      // logger(`${ message }`);
+
+      switch (true) {
+        case message === null:
+          return _bluebird.Promise.resolve('already handled by another worker');
+
+        case Math.random() < handlerErrorChancePercentage:
+          return client.rpushAsync(debuggerListKey, message).then(function () {
+            return _bluebird.Promise.resolve('wrong message(' + message + ') pushed to debug list');
+          });
+
+        default:
+          return new _bluebird.Promise(function (resolve, reject) {
+            // handle message your favorite way here
+
+            resolve();
+          }).then(function () {
+            return _bluebird.Promise.resolve('message(' + message + ') sucessfuly handled');
+          });
+      }
+    }).then(function (report) {
+
+      logger(report);
+    }).catch(function (err) {
+
+      clearTimeout(timeoutHandler);
+      pubSubClient.unsubscribe(channel);
+      pubSubClient.quit();
+      performScenario(client, STATES.QUIT, err);
+    });
+  });
+
+  var timeoutHandler = setTimeout(function () {
+
+    pubSubClient.unsubscribe(channel);
+    pubSubClient.quit();
+
+    client.setAsync(producerKey, clientId, 'PX', producerKeyTtl, 'NX').then(function (response) {
+
+      if (response === void 0) {
+        performScenario(client, STATES.HANDLE);
+      } else {
+        logger('become a producer');
+
+        performScenario(client, STATES.PRODUCE);
+      }
+    }).catch(function (err) {
+
+      logger(err);
+    });
+  }, handlerScenarioIterationDuration);
 }
 
 function outerScenario(client, message) {
