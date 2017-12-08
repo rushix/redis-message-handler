@@ -11,7 +11,6 @@ var _bluebird = require('bluebird');
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 (0, _bluebird.promisifyAll)(_redis2.default.RedisClient.prototype);
-(0, _bluebird.promisifyAll)(_redis2.default.Multi.prototype);
 
 var args = process.argv.slice(-2);
 
@@ -31,24 +30,31 @@ var config = {
 
   producerKey: 'string:producer:0:id',
   handlerListKey: 'list:handler',
+  debuggerListKey: 'list:debugger',
 
   producerKeyTtl: 15 * 1000,
 
-  producerScenarioIterationDuration: 10 * 1000,
-  handlerScenarioIterationDuration: 20 * 1000,
+  producerScenarioIterationDuration: 0.5 * 1000,
+  handlerScenarioIterationDuration: 2 * 1000,
 
   handlerErrorChancePercentage: 0.05
 };
 
-var main = function main() {
-  var createClientOptions = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+var createClientOptions = {};
 
+// entry point
+(function () {
 
   var client = _redis2.default.createClient(createClientOptions);
   logger('Thread started with clientId = ' + clientId);
 
+  client.on('error', function (err) {
+
+    performScenario(client, STATES.QUIT, err);
+  });
+
   performScenario(client);
-};
+})();
 
 function performScenario(client) {
   var state = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : STATES.CHECK;
@@ -89,11 +95,80 @@ function checkerScenario(client) {
 function debuggerScenario(client) {
   logger('Performing debugging scenario');
 
-  performScenario(client, STATES.QUIT, 'debugger scenario successfuly performed');
+  var debuggerListKey = config.debuggerListKey;
+
+
+  client.lrangeAsync(debuggerListKey, 0, -1).then(function (debuggerValues) {
+
+    logger('' + debuggerValues);
+
+    client.del(debuggerListKey);
+    performScenario(client, STATES.QUIT, 'debugger scenario successfuly performed');
+  }).catch(function (err) {
+
+    performScenario(client, STATE.QUIT, err);
+  });
 }
 
 function producerScenario(client) {
   logger('Performing producer scenario');
+
+  var producerScenarioIterationDuration = config.producerScenarioIterationDuration,
+      channel = config.channel,
+      producerKey = config.producerKey,
+      producerKeyTtl = config.producerKeyTtl,
+      handlerListKey = config.handlerListKey;
+
+
+  client.getAsync(producerKey).then(function (producerValue) {
+
+    logger('' + producerValue);
+
+    if (producerValue !== clientId) {
+      clearInterval(intervalHandler);
+      performScenario(client, STATES.HANDLE);
+
+      return _bluebird.Promise.resolve('become a handler');
+    } else {
+      return client.llenAsync(handlerListKey).then(function (count) {
+        return new _bluebird.Promise(function (resolve) {
+
+          function ping(times) {
+            if (times <= 0) {
+              return resolve('push ping for existing messages(' + count + ' times)');
+            }
+            client.publish(channel, 'ping');
+
+            ping(times - 1);
+          }
+
+          ping(count);
+        });
+      }).then(function (report) {
+
+        logger('' + report);
+      }).catch(function (err) {
+
+        performScenario(client, STATES.QUIT, err);
+      });
+    }
+  });
+
+  var intervalHandler = setInterval(function () {
+    var message = (0, _crypto.randomBytes)(5).toString('hex');
+
+    logger('producing ' + message);
+
+    client.rpushAsync(handlerListKey, message).then(function () {
+
+      client.set(producerKey, clientId, 'PX', producerKeyTtl, 'XX');
+      client.publish(channel, 'ping');
+    }).catch(function (err) {
+
+      clearTimeout(intervalHandler);
+      performScenario(client, STATES.QUIT, err);
+    });
+  }, producerScenarioIterationDuration);
 }
 
 function handlerScenario(client) {
@@ -115,12 +190,8 @@ function handlerScenario(client) {
   pubSubClient.on('message', function () {
     _bluebird.Promise.resolve().then(function () {
 
-      // logger(`${ message }`);
-
       return client.lpopAsync(handlerListKey);
     }).then(function (message) {
-
-      // logger(`${ message }`);
 
       switch (true) {
         case message === null:
@@ -159,7 +230,7 @@ function handlerScenario(client) {
 
     client.setAsync(producerKey, clientId, 'PX', producerKeyTtl, 'NX').then(function (response) {
 
-      if (response === void 0) {
+      if (response === null) {
         performScenario(client, STATES.HANDLE);
       } else {
         logger('become a producer');
@@ -183,5 +254,3 @@ function logger(message) {
   // eslint-disable-next-line no-use-before-define
   console.log('\n' + clientId + ' is:\n' + message + '\n');
 }
-
-main();

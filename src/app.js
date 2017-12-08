@@ -1,9 +1,8 @@
 import redis from 'redis';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { Promise, promisifyAll } from 'bluebird';
 
 promisifyAll(redis.RedisClient.prototype);
-promisifyAll(redis.Multi.prototype);
 
 const args = process.argv.slice(-2);
 
@@ -22,27 +21,35 @@ const STATES = {
 const config = {
   channel: 'channel:subscribtion',
 
-  producerKey:    'string:producer:0:id',
-  handlerListKey: 'list:handler',
+  producerKey:      'string:producer:0:id',
+  handlerListKey:   'list:handler',
+  debuggerListKey:  'list:debugger',
 
   producerKeyTtl: 15 * 1000,
 
   producerScenarioIterationDuration: 0.5 * 1000,
-  handlerScenarioIterationDuration:  20 * 1000,
+  handlerScenarioIterationDuration:  2 * 1000,
 
   handlerErrorChancePercentage: 0.05
 };
 
-const main = (createClientOptions = {}) => {
+const createClientOptions = {};
+
+// entry point
+(() => {
 
   const client = redis.createClient(createClientOptions);
   logger(`Thread started with clientId = ${ clientId }`);
 
+  client.on('error', err => {
 
+    performScenario(client, STATES.QUIT, err);
+
+  });
 
   performScenario(client);
 
-}
+})();
 
 function performScenario(client, state = STATES.CHECK, message = '') {
   switch (state) {
@@ -80,7 +87,22 @@ function checkerScenario(client) {
 function debuggerScenario(client) {
   logger('Performing debugging scenario');
 
-  performScenario(client, STATES.QUIT, 'debugger scenario successfuly performed');
+  const { debuggerListKey } = config;
+
+  client.lrangeAsync(debuggerListKey, 0, -1)
+  .then(debuggerValues => {
+
+    logger(`${ debuggerValues }`);
+
+    client.del(debuggerListKey);
+    performScenario(client, STATES.QUIT, 'debugger scenario successfuly performed');
+
+  })
+  .catch(err => {
+
+    performScenario(client, STATES.QUIT, err);
+
+  });
 }
 
 function producerScenario(client) {
@@ -97,41 +119,53 @@ function producerScenario(client) {
   client.getAsync(producerKey)
     .then(producerValue => {
 
+      logger(`${ producerValue }`);
+
       if (producerValue !== clientId) {
-        client.discard();
         clearInterval(intervalHandler);
-        performScenario(client);
+        performScenario(client, STATES.HANDLE);
 
         return Promise.resolve('become a handler');
       } else {
         return client.llenAsync(handlerListKey)
           .then(count => new Promise(resolve => {
+
             function ping(times) {
               if (times <= 0) {
-                resolve(`push ping for existing messages(${ count } times)`);
+                return resolve(`push ping for existing messages(${ count } times)`);
               }
-              client(channel, 'ping');
+              client.publish(channel, 'ping');
 
               ping(times - 1);
             }
 
             ping(count);
-          }));
+          }))
+          .then(report => {
 
+            logger(`${ report }`);
 
+          })
+          .catch(err => {
+
+            performScenario(client, STATES.QUIT, err);
+
+          });
       }
 
     });
 
   const intervalHandler = setInterval(() => {
-    const randomKey = parseInt(Math.random() * Number.MAX_SAFE_INTEGER, 10);
-    const message = createHash('sha1').update(`${ process.pid }-{ randomKey }`)
-                                      .digest('sha1')
-                                      .slice(8);
+    const message = randomBytes(5).toString('hex');
+
+    logger(`producing ${ message }`);
 
     client.rpushAsync(handlerListKey, message)
       .then(() => {
-        return client.publish(channel, 'ping');
+
+        client.set(producerKey, clientId, 'PX', producerKeyTtl, 'XX');
+        client.publish(channel, 'ping');
+
       })
       .catch(err => {
 
@@ -210,7 +244,7 @@ function handlerScenario(client) {
     client.setAsync(producerKey, clientId, 'PX', producerKeyTtl, 'NX')
       .then(response => {
 
-        if (response === void 0) {
+        if (response === null) {
           performScenario(client, STATES.HANDLE);
         } else {
           logger('become a producer');
@@ -239,5 +273,3 @@ function logger(message) {
   // eslint-disable-next-line no-use-before-define
   console.log(`\n${ clientId } is:\n${ message }\n`);
 }
-
-main();
