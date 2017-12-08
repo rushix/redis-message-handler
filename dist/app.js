@@ -106,7 +106,7 @@ function debuggerScenario(client) {
     performScenario(client, STATES.QUIT, 'debugger scenario successfuly performed');
   }).catch(function (err) {
 
-    performScenario(client, STATE.QUIT, err);
+    performScenario(client, STATES.QUIT, err);
   });
 }
 
